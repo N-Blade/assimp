@@ -353,7 +353,6 @@ void loadIndices(const UByteBuffer& pIndicesSection, IndicesHolder& sourceIndice
 
     // Go through the primitive groups and remap the primitves to be zero based from the start of its vertices.
     for (uint32_t i = 0; i < pIH->nTriangleGroups_; i++) {
-        // nSourceIndices_ += pPG[i].nPrimitives_ * 3;
         sourcePrimitiveGroups.push_back(pPG[i]);
         
         PrimitiveGroup& pg = sourcePrimitiveGroups.back();
@@ -599,6 +598,9 @@ void parseStatic(const std::string &pFile, aiScene* pScene, IOSystem* pIOHandler
     std::map<std::string, std::vector<unsigned int>> transformNodes;
 
     std::vector<std::unique_ptr<aiMesh>> _meshes;
+    std::vector<std::unique_ptr<aiMaterial>> _materials;
+
+
     for (XmlNode renderSetNode = visualFileRoot.child("renderSet"); renderSetNode; renderSetNode = renderSetNode.next_sibling("renderSet")) {
 #ifdef DEBUG_BW
         ASSIMP_LOG_DEBUG("!!! RederingSet found");
@@ -649,11 +651,80 @@ void parseStatic(const std::string &pFile, aiScene* pScene, IOSystem* pIOHandler
         for (XmlNode pgNode = geometryNode.child("primitiveGroup"); pgNode; pgNode = pgNode.next_sibling("primitiveGroup")) {
             auto identifier = ai_trim(pgNode.child_value());
             const int pgIdx{std::stoi(identifier)};
-            // XmlNode materialNode = pgNode.child("material");
+
+            unsigned int materialIndex = 0;
+            {
+                XmlNode materialNode = pgNode.child("material");
+
+                std::unique_ptr<aiMaterial> mat(new aiMaterial);
+
+                // Name
+                aiString ainame(ai_trim(materialNode.child_value("identifier")));
+                mat->AddProperty(&ainame, AI_MATKEY_NAME);
+
+                // open the effect itself
+                std::vector<std::string> fxNames;
+                fxNames.emplace_back(ai_trim(materialNode.child_value("fx")));
+                if (fxNames.size() > 1) {
+                    ASSIMP_LOG_ERROR("Found multiple .fx files in ", pFile, ".visual");
+                }
+
+                // std::string channel = pSection->readString("channel");
+                // DataSectionPtr pMFMSect = pSection->openSection("mfm");
+
+                for (XmlNode propertyNode = materialNode.child("property"); propertyNode; propertyNode = propertyNode.next_sibling("property")) {
+                    std::string property = ai_trim(propertyNode.child_value());
+                    if (property == "doubleSided") {
+                        std::string v(propertyNode.child_value("Bool"));
+                        if (v == "true") {
+                            int i = 1;
+                            mat->AddProperty(&i, 1, AI_MATKEY_TWOSIDED);
+                        }
+                    } else if (property == "diffuseMap") {
+                        // std::string filename(ai_trim(propertyNode.child_value("Texture")));
+                        aiString texname(ai_trim(propertyNode.child_value("Texture")));
+                        mat->AddProperty(&texname, AI_MATKEY_TEXTURE_DIFFUSE(0));
+                        //
+                    } else if (property == "selfIllumination") {
+                        // std::string f(ai_trim(propertyNode.child_value("Float")));
+                        // float v = std::stof(f);
+                        // AI_MATKEY_SHININESS
+                    } else if (property == "alphaTestEnable") {
+                        std::string v(propertyNode.child_value("Bool"));
+                        if (v == "true") {
+                        }
+                    } else {
+                        throw DeadlyImportError("Unsupported property: ", property);
+                    }
+                }
+
+                // // Diffuse color
+                // mat->AddProperty(&color, 1, AI_MATKEY_COLOR_DIFFUSE);
+
+                // // Opacity
+                // mat->AddProperty(&alpha, 1, AI_MATKEY_OPACITY);
+
+                // // Specular color
+                // aiColor3D speccolor(shiny, shiny, shiny);
+                // mat->AddProperty(&speccolor, 1, AI_MATKEY_COLOR_SPECULAR);
+
+                // // Specular power
+                // float specpow = shiny * 128;
+                // mat->AddProperty(&specpow, 1, AI_MATKEY_SHININESS);
+
+                // Double sided
+                // if (fx & 0x10) { // doubleSided
+                //     int i = 1;
+                //     mat->AddProperty(&i, 1, AI_MATKEY_TWOSIDED);
+                // }
+
+                materialIndex = _materials.size();
+                _materials.emplace_back(std::move(mat));
+            }
 
             const PrimitiveGroup& pg = sourcePrimitiveGroups[pgIdx];
             std::unique_ptr<aiMesh> mesh(new aiMesh);    
-            // mesh->mMaterialIndex = matid;
+            mesh->mMaterialIndex = materialIndex;
             mesh->mNumFaces = 0;
             mesh->mPrimitiveTypes = aiPrimitiveType_TRIANGLE;
 
@@ -743,11 +814,11 @@ void parseStatic(const std::string &pFile, aiScene* pScene, IOSystem* pIOHandler
     // nodesHolder.clear(); // node ownership now belongs to scene
 
     // material
-    // if (!_materials.size()) {
-    //     _materials.emplace_back(std::unique_ptr<aiMaterial>(new aiMaterial));
-    // }
-    // pScene->mNumMaterials = static_cast<unsigned int>(_materials.size());
-    // pScene->mMaterials = unique_to_array(_materials);
+    if (!_materials.size()) {
+        _materials.emplace_back(std::unique_ptr<aiMaterial>(new aiMaterial));
+    }
+    pScene->mNumMaterials = static_cast<unsigned int>(_materials.size());
+    pScene->mMaterials = unique_to_array(_materials);
 
     // meshes
     pScene->mNumMeshes = static_cast<unsigned int>(_meshes.size());
@@ -770,6 +841,9 @@ void parseStatic(const std::string &pFile, aiScene* pScene, IOSystem* pIOHandler
 
     FlipWindingOrderProcess flip;
     flip.Execute(pScene);
+
+    FlipUVsProcess flipUVs;
+    flipUVs.Execute(pScene);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -795,7 +869,7 @@ void BWImporter::InternReadFile(const std::string &pFile, aiScene *pScene, IOSys
             // ExportSettings::STATIC
             std::string filename = nodelessVisual.child_value();
             filename = ai_trim(filename);
-            filename = "/workspaces/assimp/test/models/BW/unit_cube";
+            filename = "/workspaces/assimp/test/models/BW/unit_cube"; // todo: remove it, and improve file path diagnostic
             parseStatic(filename, pScene, pIOHandler);
             return;
         }
