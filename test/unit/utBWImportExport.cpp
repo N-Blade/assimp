@@ -10,7 +10,8 @@ class utBWImportExport : public AbstractImportExportBase {
 public:
     virtual bool importerTest() {
         Assimp::Importer importer;
-        const aiScene *scene = importer.ReadFile(ASSIMP_TEST_MODELS_DIR "/BW/unit_cube.model", aiProcess_ValidateDataStructure);
+//        const aiScene *scene = importer.ReadFile(ASSIMP_TEST_MODELS_DIR "/BW/unit_cube.model", aiProcess_ValidateDataStructure);
+        const aiScene *scene = importer.ReadFile("/game/res/models/misc/S1_192_Flag_v01.visual", aiProcess_ValidateDataStructure);
         return nullptr != scene;
     }
 };

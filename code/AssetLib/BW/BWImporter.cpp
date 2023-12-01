@@ -80,7 +80,7 @@ static constexpr aiImporterDesc desc = {
     0,
     0,
     0,
-    "model" // primitives // visual
+    "model visual" // primitives // visual
 };
 
 #ifdef _MSC_VER
@@ -262,7 +262,7 @@ public:
         }
     }
     uint32_t get(int32_t index) const {
-        if (index < 0 || index >= size_) {
+        if (index < 0 || static_cast<uint32_t>(index) >= size_) {
             throw DeadlyImportError("BW Importer - error in B3D file data: Bad triangle index ", index);
         }
 
@@ -335,12 +335,6 @@ void loadIndices(const UByteBuffer& pIndicesSection, IndicesHolder& sourceIndice
     // Get the index header
     const IndexHeader* pIH =  reinterpret_cast<const IndexHeader*>(&pIndicesSection[0]);
 
-    // The max index count per primitive group for us to consider using the visual compound on an object.
-    constexpr uint32_t MAX_INDEX_COUNT = 3000;
-    if (pIH->nIndices_ / pIH->nTriangleGroups_ >= MAX_INDEX_COUNT) {
-        throw DeadlyImportError("Index count too big"); // maybe it is not a problem for convertor
-    }
-
     // Only supports index lists, no strips.
     const std::string indexFormat = pIH->indexFormat_;
     // Make a local copy of the indices
@@ -357,9 +351,6 @@ void loadIndices(const UByteBuffer& pIndicesSection, IndicesHolder& sourceIndice
         (unsigned char*)( pIH + 1 ) + pIH->nIndices_ * sourceIndices.entrySize()
     );
 
-    // uint32_t nSourceVerts_ = 0;
-    // uint32_t nSourceIndices_ = 0;
-
     // Go through the primitive groups and remap the primitves to be zero based from the start of its vertices.
     for (uint32_t i = 0; i < pIH->nTriangleGroups_; i++) {
         // nSourceIndices_ += pPG[i].nPrimitives_ * 3;
@@ -375,10 +366,6 @@ void loadIndices(const UByteBuffer& pIndicesSection, IndicesHolder& sourceIndice
         }
         pg.nVertices_ = top - bottom + 1;
         pg.startVertex_ = bottom;
-        for (int i = 0; i < (pg.nPrimitives_ * 3); i++) {
-            sourceIndices.set(i + pg.startIndex_, sourceIndices[i + pg.startIndex_] - pg.startVertex_);
-        }
-        // nSourceVerts_ += pg.nVertices_;
     }
 }
 
@@ -623,7 +610,9 @@ void parseStatic(const std::string &pFile, aiScene* pScene, IOSystem* pIOHandler
             const std::string nodeId = ai_trim(nodeIdNode.child_value());
             nodes.emplace(nodeId);
         }
-        nodes.emplace(rootNode->mName.C_Str());
+        if (nodes.empty()) {
+            nodes.emplace(rootNode->mName.C_Str());
+        }
 #ifdef DEBUG_BW
         ASSIMP_LOG_DEBUG("RederingSet nodes: ", ai_to_string(nodes));
 #endif
@@ -633,14 +622,17 @@ void parseStatic(const std::string &pFile, aiScene* pScene, IOSystem* pIOHandler
         std::vector<VertexXYZNUVTBPC> vertices;
         {
             std::string verticesSectionName = ai_trim(geometryNode.child_value("vertices"));
+#ifdef DEBUG_BW
             ASSIMP_LOG_DEBUG("RederingSet vertices section name: ", verticesSectionName);
-
+#endif
             auto const& verticesData = sections[verticesSectionName];
             loadVertices(verticesData, vertices); // todo: we may introduce parsed vertices cache for not to load data twice
+#ifdef DEBUG_BW
             ASSIMP_LOG_DEBUG("load vertices count: ", vertices.size());
             for (auto const& v:  vertices) {
                 ASSIMP_LOG_DEBUG("vertix: ", v.pos_.x, "; ", v.pos_.y, "; ", v.pos_.z, "; ");
             }
+#endif
         }
 
         std::string primitiveSectionName = ai_trim(geometryNode.child_value("primitive"));
@@ -653,15 +645,14 @@ void parseStatic(const std::string &pFile, aiScene* pScene, IOSystem* pIOHandler
         std::vector<PrimitiveGroup> sourcePrimitiveGroups;
         loadIndices(indicesData, indicesHolder, sourcePrimitiveGroups);
         
-        // // Open the geometry section, the resource is assumed to be a static visual with one or more primitive groups
-        // for (XmlNode pgNode = geometryNode.child("primitiveGroup"); pgNode; pgNode = pgNode.next_sibling("primitiveGroup")) {
-        //     auto identifier = ai_trim(pgNode.child_value());
-        //     XmlNode materialNode = pgNode.child("material");
-        //     // todo
-        // }
+        // Open the geometry section, the resource is assumed to be a static visual with one or more primitive groups
+        for (XmlNode pgNode = geometryNode.child("primitiveGroup"); pgNode; pgNode = pgNode.next_sibling("primitiveGroup")) {
+            auto identifier = ai_trim(pgNode.child_value());
+            const int pgIdx{std::stoi(identifier)};
+            // XmlNode materialNode = pgNode.child("material");
 
-        for (const PrimitiveGroup& pg: sourcePrimitiveGroups) {
-            std::unique_ptr<aiMesh> mesh(new aiMesh);
+            const PrimitiveGroup& pg = sourcePrimitiveGroups[pgIdx];
+            std::unique_ptr<aiMesh> mesh(new aiMesh);    
             // mesh->mMaterialIndex = matid;
             mesh->mNumFaces = 0;
             mesh->mPrimitiveTypes = aiPrimitiveType_TRIANGLE;
@@ -669,13 +660,17 @@ void parseStatic(const std::string &pFile, aiScene* pScene, IOSystem* pIOHandler
             aiFace *face = mesh->mFaces = new aiFace[pg.nPrimitives_];
             for (int32_t i = 0; i < pg.nPrimitives_; i++) {
                 int pi = pg.startIndex_ + i * 3;
-                uint32_t i0 = indicesHolder[pi];
-                uint32_t i1 = indicesHolder[pi + 1];
-                uint32_t i2 = indicesHolder[pi + 2];
+
+                int32_t i0 = indicesHolder[pi] - pg.startVertex_;
+                int32_t i1 = indicesHolder[pi + 1] - pg.startVertex_;
+                int32_t i2 = indicesHolder[pi + 2] - pg.startVertex_;
 
 #ifdef DEBUG_BW
                 ASSIMP_LOG_ERROR("triangle index: i0=", i0, ", i1=", i1, ", i2=", i2);
 #endif
+                if ((i0 < 0 || i0 >= pg.nVertices_) || (i1 < 0 || i1 >= pg.nVertices_) || (i1 < 0 || i1 >= pg.nVertices_)) {
+                    throw DeadlyImportError("Incorrect trasformation node identifier: ", i0);
+                }
 
                 face->mNumIndices = 3;
                 face->mIndices = new unsigned int[3];
@@ -688,16 +683,15 @@ void parseStatic(const std::string &pFile, aiScene* pScene, IOSystem* pIOHandler
 #ifdef DEBUG_BW
             ASSIMP_LOG_ERROR("triangle added: ", mesh->mNumFaces, " of ", pg.nPrimitives_);
 #endif
-            mesh->mNumVertices = pg.startIndex_ + pg.nVertices_;
+            mesh->mNumVertices = pg.nVertices_;
             mesh->mVertices = new aiVector3D[mesh->mNumVertices];
             mesh->mNormals = new aiVector3D[mesh->mNumVertices];
             mesh->mTangents = new aiVector3D[mesh->mNumVertices];
             mesh->mBitangents = new aiVector3D[mesh->mNumVertices];
             mesh->mTextureCoords[0] = new aiVector3D[mesh->mNumVertices];
             
-            for (int32_t i = 0; i < pg.nVertices_; i++ ) {
-                auto idx = i;
-                auto const& v = vertices[idx];
+            for (int32_t idx = 0; idx < pg.nVertices_; idx++ ) {
+                auto const& v = vertices[pg.startVertex_ + idx];
 
                 mesh->mVertices[idx].x = v.pos_.x;
                 mesh->mVertices[idx].y = v.pos_.y;
@@ -718,7 +712,7 @@ void parseStatic(const std::string &pFile, aiScene* pScene, IOSystem* pIOHandler
                 mesh->mTextureCoords[0][idx].x = v.uv_.u;
                 mesh->mTextureCoords[0][idx].y = v.uv_.v;
 #ifdef DEBUG_BW
-                ASSIMP_LOG_ERROR("vertex index: ", idx, "; pos: x=", mesh->mVertices[idx].x, ", y=", mesh->mVertices[idx].y, ", z=", mesh->mVertices[idx].z);
+                ASSIMP_LOG_ERROR("vertex index: ", idx, " (", (pg.startVertex_ + idx), "); pos: x=", mesh->mVertices[idx].x, ", y=", mesh->mVertices[idx].y, ", z=", mesh->mVertices[idx].z);
 #endif
             }
 #ifdef DEBUG_BW
@@ -731,7 +725,6 @@ void parseStatic(const std::string &pFile, aiScene* pScene, IOSystem* pIOHandler
 
             _meshes.emplace_back(std::move(mesh));
         }
-
     }
 
             
@@ -772,47 +765,56 @@ void parseStatic(const std::string &pFile, aiScene* pScene, IOSystem* pIOHandler
     // }
 
     // convert to RH
-    // MakeLeftHandedProcess makeleft;
-    // makeleft.Execute(pScene);
+    MakeLeftHandedProcess makeleft;
+    makeleft.Execute(pScene);
 
-    // FlipWindingOrderProcess flip;
-    // flip.Execute(pScene);
-
+    FlipWindingOrderProcess flip;
+    flip.Execute(pScene);
 }
 
 // ------------------------------------------------------------------------------------------------
 void BWImporter::InternReadFile(const std::string &pFile, aiScene *pScene, IOSystem *pIOHandler) {
-    std::unique_ptr<IOStream> file(pIOHandler->Open(pFile));
+    std::string ext(GetExtension(pFile));
+    if (ext == "model") {
+        std::unique_ptr<IOStream> file(pIOHandler->Open(pFile));
 
-    // Check whether we can read from the file
-    if (file == nullptr) {
-        throw DeadlyImportError("Failed to open BW file ", pFile, ".");
-    }
+        // Check whether we can read from the file
+        if (file == nullptr) {
+            throw DeadlyImportError("Failed to open BW file ", pFile, ".");
+        }
 
-    XmlParser xmlParser;
-    // generate a XML reader for it
-    if (!xmlParser.parse(file.get())) {
-        throw DeadlyImportError("Unable to read file, malformed XML");
-    }
-    // start reading
-    XmlNode node = xmlParser.getRootNode().first_child();
-    XmlNode nodelessVisual = node.child("nodelessVisual");
-    if (!nodelessVisual.empty()) {
-        // ExportSettings::STATIC
-        std::string filename = nodelessVisual.child_value();
-        filename = ai_trim(filename);
-        filename = "/workspaces/assimp/test/models/BW/unit_cube";
+        XmlParser xmlParser;
+        // generate a XML reader for it
+        if (!xmlParser.parse(file.get())) {
+            throw DeadlyImportError("Unable to read file, malformed XML");
+        }
+        // start reading
+        XmlNode node = xmlParser.getRootNode().first_child();
+        XmlNode nodelessVisual = node.child("nodelessVisual");
+        if (!nodelessVisual.empty()) {
+            // ExportSettings::STATIC
+            std::string filename = nodelessVisual.child_value();
+            filename = ai_trim(filename);
+            filename = "/workspaces/assimp/test/models/BW/unit_cube";
+            parseStatic(filename, pScene, pIOHandler);
+            return;
+        }
+        XmlNode nodefullVisual = node.child("nodefullVisual");
+        if (!nodefullVisual.empty()) {
+            // ExportSettings::NORMAL || ExportSettings::STATIC_WITH_NODES
+            std::string filename = nodefullVisual.child_value();
+            return;
+        }
+
+        throw DeadlyImportError("Unknown export mode in ", pFile, ".");
+    } else if (ext == "visual") {
+        std::string filename = pFile.substr(0, pFile.length() - ext.length() - 1);
+        // todo: it may be not static file
         parseStatic(filename, pScene, pIOHandler);
         return;
+    } else {
+        throw DeadlyImportError("Unknown file format: ", pFile);
     }
-    XmlNode nodefullVisual = node.child("nodefullVisual");
-    if (!nodefullVisual.empty()) {
-        // ExportSettings::NORMAL || ExportSettings::STATIC_WITH_NODES
-        std::string filename = nodefullVisual.child_value();
-        return;
-    }
-
-    throw DeadlyImportError("Unknown export mode in ", pFile, ".");
 
     // _pos = 0;
     // _buf.resize(fileSize);
