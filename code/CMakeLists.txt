@@ -350,6 +350,11 @@ ADD_ASSIMP_IMPORTER( B3D
   AssetLib/B3D/B3DImporter.h
 )
 
+ADD_ASSIMP_IMPORTER( BW
+  AssetLib/BW/BWImporter.cpp
+  AssetLib/BW/BWImporter.h
+)
+
 ADD_ASSIMP_IMPORTER( BVH
   AssetLib/BVH/BVHLoader.cpp
   AssetLib/BVH/BVHLoader.h

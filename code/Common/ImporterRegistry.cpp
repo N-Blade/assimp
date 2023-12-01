@@ -133,6 +133,9 @@ corresponding preprocessor flag to selectively disable formats.
 #ifndef ASSIMP_BUILD_NO_B3D_IMPORTER
 #include "AssetLib/B3D/B3DImporter.h"
 #endif
+#ifndef ASSIMP_BUILD_NO_BW_IMPORTER
+#include "AssetLib/BW/BWImporter.h"
+#endif
 #ifndef ASSIMP_BUILD_NO_COLLADA_IMPORTER
 #include "AssetLib/Collada/ColladaLoader.h"
 #endif
@@ -312,6 +315,9 @@ void GetImporterInstanceList(std::vector<BaseImporter *> &out) {
 #endif
 #if (!defined ASSIMP_BUILD_NO_B3D_IMPORTER)
     out.push_back(new B3DImporter());
+#endif
+#if (!defined ASSIMP_BUILD_NO_BW_IMPORTER)
+    out.push_back(new BWImporter());
 #endif
 #if (!defined ASSIMP_BUILD_NO_COLLADA_IMPORTER)
     out.push_back(new ColladaLoader());
